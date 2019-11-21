@@ -53,9 +53,13 @@ function main() {
     // Note: there is no equivalent npm functionality to clean out individual packages
     // from the npm cache.
     clearYarnFilePathCaches(pkg);
+    process.stdout.write(JSON.stringify({pnp: isPnp(pkg)}));
   }
 }
 
+function isPnp(pkg) {
+  return !!(pkg.installConfig && pkg.installConfig.pnp && pkg.installConfig.pnp === true)
+}
 /**
  * Runs `yarn cache clean` for all packages that have `file://` URIs.
  * Work-around for https://github.com/yarnpkg/yarn/issues/2165.

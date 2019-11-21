@@ -162,7 +162,7 @@ readonly repository_args=$(rlocation "TEMPLATED_repository_args")
 MAIN=$(rlocation "TEMPLATED_loader_path")
 readonly link_modules_script=$(rlocation "TEMPLATED_link_modules_script")
 bazel_require_script=$(rlocation "TEMPLATED_bazel_require_script")
-
+pnp_file=$(rlocation "TEMPLATED_pnp_file")
 # Node's --require option assumes that a non-absolute path not starting with `.` is
 # a module, so that you can do --require=source-map-support/register
 # So if the require script is not absolute, we must make it so
@@ -188,6 +188,10 @@ for ARG in "${ALL_ARGS[@]}"; do
       NODE_OPTIONS+=( "--require" "$bazel_require_script" )
       ;;
     --node_options=*) NODE_OPTIONS+=( "${ARG#--node_options=}" ) ;;
+    --pnp)
+      MAIN="TEMPLATED_script_path"
+      NODE_OPTIONS+=("--require" "${pnp_file}")
+      ;;
     *) ARGS+=( "$ARG" )
   esac
 done

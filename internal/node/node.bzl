@@ -200,7 +200,7 @@ def _nodejs_binary_impl(ctx):
     node_tool_files.append(ctx.file._bazel_require_script)
 
     if not ctx.outputs.templated_args_file:
-        templated_args = ctx.attr.templated_args
+        templated_args = [a for a in ctx.attr.templated_args]
     else:
         # Distribute the templated_args between the params file and the node options
         params = []
@@ -226,6 +226,10 @@ def _nodejs_binary_impl(ctx):
 
     is_builtin = ctx.attr._node.label.workspace_name in ["nodejs_%s" % p for p in BUILT_IN_NODE_PLATFORMS]
 
+    output_files = [ctx.outputs.loader]
+    if ctx.file.pnp_file:
+        templated_args.append("--pnp")
+        output_files.append(ctx.file.pnp_file)
     substitutions = {
         "TEMPLATED_args": " ".join([
             expand_location_into_runfiles(ctx, a)
@@ -239,6 +243,7 @@ def _nodejs_binary_impl(ctx):
         "TEMPLATED_repository_args": _to_manifest_path(ctx, ctx.file._repository_args),
         "TEMPLATED_script_path": _to_execroot_path(ctx, ctx.file.entry_point),
         "TEMPLATED_vendored_node": "" if is_builtin else strip_external(ctx.file._node.path),
+        "TEMPLATED_pnp_file": _to_manifest_path(ctx, ctx.file.pnp_file) if ctx.file.pnp_file else "",
     }
     ctx.actions.expand_template(
         template = ctx.file._launcher_template,
@@ -264,9 +269,7 @@ def _nodejs_binary_impl(ctx):
             executable = executable,
             runfiles = ctx.runfiles(
                 transitive_files = runfiles,
-                files = node_tool_files + [
-                            ctx.outputs.loader,
-                        ] + ctx.files._source_map_support_files +
+                files = node_tool_files + output_files + ctx.files._source_map_support_files +
 
                         # We need this call to the list of Files.
                         # Calling the .to_list() method may have some perfs hits,
@@ -511,7 +514,12 @@ _NODEJS_EXECUTABLE_OUTPUTS = {
 # and duplicate the definitions to give two distinct symbols.
 nodejs_binary = rule(
     implementation = _nodejs_binary_impl,
-    attrs = _NODEJS_EXECUTABLE_ATTRS,
+    attrs = dict(_NODEJS_EXECUTABLE_ATTRS, **{
+        "pnp_file": attr.label(
+            mandatory = False,
+            allow_single_file = True,
+            ),
+        }),
     doc = "Runs some JavaScript code in NodeJS.",
     executable = True,
     outputs = _NODEJS_EXECUTABLE_OUTPUTS,

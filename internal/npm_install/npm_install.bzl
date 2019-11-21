@@ -24,6 +24,7 @@ See discussion in the README.
 load("//internal/common:check_bazel_version.bzl", "check_bazel_version")
 load("//internal/common:os_name.bzl", "is_windows_os")
 load("//internal/node:node_labels.bzl", "get_node_label", "get_npm_label", "get_yarn_label")
+load("//third_party/github.com/bazel_json/lib:json_parser.bzl", "json_parse")
 
 COMMON_ATTRIBUTES = dict(dict(), **{
     "always_hide_bazel_files": attr.bool(
@@ -140,6 +141,30 @@ YARN_ENVIRONMENT = [
     "LDFLAGS",
     "PATH",
 ]
+def _process_pnp_file(repository_ctx, node,workspace_path):
+    repository_ctx.report_progress("Processing PNP file: Patching module directory")
+    result = repository_ctx.execute([
+        node,
+        "process_pnp_file.js",
+       workspace_path
+    ])
+    if result.return_code:
+        fail("process_pnp_file.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+
+def _create_pnp_build_files(repository_ctx, rule_type, node,workspace_path):
+    error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
+
+    repository_ctx.report_progress("Processing node_modules: installing Bazel packages and generating BUILD files")
+    if repository_ctx.attr.manual_build_file_contents:
+        repository_ctx.file("manual_build_file_contents", repository_ctx.attr.manual_build_file_contents)
+    result = repository_ctx.execute([
+        node,
+        "generate_pnp_build_files.js",
+       workspace_path
+    ]) 
+    repository_ctx.report_progress("Running yarn install on")
+    if result.return_code:
+        fail("generate_pnp_build_files.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
 
 def _create_build_files(repository_ctx, rule_type, node, lock_file):
     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
@@ -165,11 +190,19 @@ def _add_scripts(repository_ctx):
         repository_ctx.path(Label("//internal/npm_install:pre_process_package_json.js")),
         {},
     )
-
     repository_ctx.template(
         "generate_build_file.js",
         repository_ctx.path(Label("//internal/npm_install:generate_build_file.js")),
         {},
+    )
+
+    repository_ctx.template(
+        "generate_pnp_build_files.js",
+        repository_ctx.path(Label("//internal/npm_install:generate_pnp_build_files.js"))
+    )
+    repository_ctx.template(
+        "process_pnp_file.js",
+        repository_ctx.path(Label("//internal/npm_install:process_pnp_file.js"))
     )
 
 def _add_package_json(repository_ctx):
@@ -277,6 +310,7 @@ cd "{root}" && "{npm}" {npm_args}
     )
     if result.return_code:
         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+    is_pnp = json_parse(result.stdout)["pnp"]
 
     repository_ctx.report_progress("Running npm install on %s" % repository_ctx.attr.package_json)
     result = repository_ctx.execute(
@@ -302,8 +336,13 @@ cd "{root}" && "{npm}" {npm_args}
 
     if repository_ctx.attr.symlink_node_modules:
         _symlink_node_modules(repository_ctx)
+    if is_pnp:
+        _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
+        _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
+    else:
+        _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
 
-    _create_build_files(repository_ctx, "npm_install", node, repository_ctx.attr.package_lock_json)
+
 
 npm_install = repository_rule(
     attrs = dict(COMMON_ATTRIBUTES, **{
@@ -346,13 +385,6 @@ def _yarn_install_impl(repository_ctx):
         _add_data_dependencies(repository_ctx)
 
     _add_scripts(repository_ctx)
-
-    result = repository_ctx.execute(
-        [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "yarn"],
-        quiet = repository_ctx.attr.quiet,
-    )
-    if result.return_code:
-        fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
     result = repository_ctx.execute([
         "sed",
         "-i",
@@ -371,7 +403,6 @@ def _yarn_install_impl(repository_ctx):
     ])
     if result.return_code:
         fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
-
     args = [
         repository_ctx.path(yarn),
         "--cwd",
@@ -416,6 +447,12 @@ def _yarn_install_impl(repository_ctx):
         "-type",
         "f",
         "-name",
+    if is_pnp:
+        repository_ctx.report_progress("Processing PnP workspace")
+        _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
+        _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
+    else:
+        repository_ctx.report_progress("Processing node modules workspace")
         "*.pyc",
         "-delete",
     ])
@@ -436,8 +473,7 @@ def _yarn_install_impl(repository_ctx):
     ])
     if result.return_code:
         fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
-
-    _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
+        _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
 
 yarn_install = repository_rule(
     attrs = dict(COMMON_ATTRIBUTES, **{
