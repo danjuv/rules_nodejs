@@ -131,6 +131,16 @@ data attribute.
     ),
 })
 
+YARN_ENVIRONMENT = [
+    "CC",
+    "CFLAGS",
+    "CXX",
+    "CXXFLAGS",
+    "JAVA_HOME",
+    "LDFLAGS",
+    "PATH",
+]
+
 def _create_build_files(repository_ctx, rule_type, node, lock_file):
     error_on_build_files = repository_ctx.attr.symlink_node_modules and not repository_ctx.attr.always_hide_bazel_files
 
@@ -165,7 +175,7 @@ def _add_scripts(repository_ctx):
 def _add_package_json(repository_ctx):
     repository_ctx.symlink(
         repository_ctx.attr.package_json,
-        repository_ctx.path("package.json"),
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
     )
 
 def _add_data_dependencies(repository_ctx):
@@ -325,12 +335,12 @@ def _yarn_install_impl(repository_ctx):
     if repository_ctx.attr.symlink_node_modules:
         root = repository_ctx.path(repository_ctx.attr.package_json).dirname
     else:
-        root = repository_ctx.path("")
+        root = repository_ctx.path(repository_ctx.attr.package_json.package)
 
     if not repository_ctx.attr.symlink_node_modules:
         repository_ctx.symlink(
             repository_ctx.attr.yarn_lock,
-            repository_ctx.path("yarn.lock"),
+            repository_ctx.path(repository_ctx.attr.yarn_lock.package + "/yarn.lock"),
         )
         _add_package_json(repository_ctx)
         _add_data_dependencies(repository_ctx)
@@ -343,6 +353,24 @@ def _yarn_install_impl(repository_ctx):
     )
     if result.return_code:
         fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+    result = repository_ctx.execute([
+        "sed",
+        "-i",
+        "-e",
+        "/^ *\"preinstall\".*$/d",
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+    ])
+    if result.return_code:
+        fail("deleting preinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+    result = repository_ctx.execute([
+        "sed",
+        "-i",
+        "-e",
+        "/^ *\"postinstall\".*$/d",
+        repository_ctx.path(repository_ctx.attr.package_json.package + "/package.json"),
+    ])
+    if result.return_code:
+        fail("deleting postinstall scripts failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
 
     args = [
         repository_ctx.path(yarn),
@@ -350,6 +378,8 @@ def _yarn_install_impl(repository_ctx):
         root,
         "--network-timeout",
         str(repository_ctx.attr.network_timeout * 1000),  # in ms
+        "--modules-folder",
+        repository_ctx.path("node_modules"),
     ]
 
     if repository_ctx.attr.frozen_lockfile:
@@ -371,6 +401,7 @@ def _yarn_install_impl(repository_ctx):
     repository_ctx.report_progress("Running yarn install on %s" % repository_ctx.attr.package_json)
     result = repository_ctx.execute(
         args,
+        environment = {k: repository_ctx.os.environ[k] for k in YARN_ENVIRONMENT},
         timeout = repository_ctx.attr.timeout,
         quiet = repository_ctx.attr.quiet,
     )
@@ -379,6 +410,32 @@ def _yarn_install_impl(repository_ctx):
 
     if repository_ctx.attr.symlink_node_modules:
         _symlink_node_modules(repository_ctx)
+    result = repository_ctx.execute([
+        "find",
+        repository_ctx.path("node_modules"),
+        "-type",
+        "f",
+        "-name",
+        "*.pyc",
+        "-delete",
+    ])
+    if result.return_code:
+        fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
+    result = repository_ctx.execute([
+        "find",
+        repository_ctx.path("node_modules"),
+        "-type",
+        "f",
+        "-name",
+        "*.node",
+        "-exec",
+        "strip",
+        "-S",
+        "{}",
+        ";",
+    ])
+    if result.return_code:
+        fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
 
     _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
 
@@ -420,4 +477,5 @@ cache_directory.
     }),
     doc = "Runs yarn install during workspace setup.",
     implementation = _yarn_install_impl,
+    environ = YARN_ENVIRONMENT,
 )
