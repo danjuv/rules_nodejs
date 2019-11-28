@@ -385,6 +385,14 @@ def _yarn_install_impl(repository_ctx):
         _add_data_dependencies(repository_ctx)
 
     _add_scripts(repository_ctx)
+    result = repository_ctx.execute(
+        [node, "pre_process_package_json.js", repository_ctx.path(repository_ctx.attr.package_json), "yarn"],
+        quiet = repository_ctx.attr.quiet,
+    )
+    if result.return_code:
+        fail("pre_process_package_json.js failed: \nSTDOUT:\n%s\nSTDERR:\n%s" % (result.stdout, result.stderr))
+    is_pnp = json_parse(result.stdout)["pnp"]
+
     result = repository_ctx.execute([
         "sed",
         "-i",
@@ -441,38 +449,37 @@ def _yarn_install_impl(repository_ctx):
 
     if repository_ctx.attr.symlink_node_modules:
         _symlink_node_modules(repository_ctx)
-    result = repository_ctx.execute([
-        "find",
-        repository_ctx.path("node_modules"),
-        "-type",
-        "f",
-        "-name",
     if is_pnp:
         repository_ctx.report_progress("Processing PnP workspace")
         _process_pnp_file(repository_ctx, node, repository_ctx.path(root.basename))
         _create_pnp_build_files(repository_ctx, "pnp_install", node, repository_ctx.path(root.basename))
     else:
-        repository_ctx.report_progress("Processing node modules workspace")
-        "*.pyc",
-        "-delete",
-    ])
-    if result.return_code:
-        fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
-    result = repository_ctx.execute([
-        "find",
-        repository_ctx.path("node_modules"),
-        "-type",
-        "f",
-        "-name",
-        "*.node",
-        "-exec",
-        "strip",
-        "-S",
-        "{}",
-        ";",
-    ])
-    if result.return_code:
-        fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
+        result = repository_ctx.execute([
+            "find",
+            repository_ctx.path("node_modules"),
+            "-type",
+            "f",
+            "-name",
+            "*.pyc",
+            "-delete",
+        ])
+        if result.return_code:
+            fail("deleting .pyc files failed: %s (%s)" % (result.stdout, result.stderr))
+        result = repository_ctx.execute([
+            "find",
+            repository_ctx.path("node_modules"),
+            "-type",
+            "f",
+            "-name",
+            "*.node",
+            "-exec",
+            "strip",
+            "-S",
+            "{}",
+            ";",
+        ])
+        if result.return_code:
+            fail("stripping .node files failed: %s (%s)" % (result.stdout, result.stderr))
         _create_build_files(repository_ctx, "yarn_install", node, repository_ctx.attr.yarn_lock)
 
 yarn_install = repository_rule(
